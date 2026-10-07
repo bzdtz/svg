@@ -1,0 +1,16 @@
+{
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && tsc -p tsconfig.test.json && node .test-dist/tests/unit.test.js",
+    "test:e2e": "npm run build",
+    "build": "vite build",
+    "build:single": "npm run build && node scripts/build-single.mjs",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "vite": "^7.0.0",
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {}
+}

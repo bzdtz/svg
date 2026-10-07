@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": false,
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": ".",
+    "types": []
+  },
+  "include": [
+    "src/constants.ts",
+    "src/geometry.ts",
+    "src/pathData.ts",
+    "src/types.ts",
+    "tests/**/*.ts"
+  ]
+}

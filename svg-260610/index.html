@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI SVG 二次优化编辑器</title>
+</head>
+<body>
+<section id="landing">
+    <div class="import-box">
+      <div class="brand">
+        <div>
+          <h1>AI SVG 二次优化编辑器</h1>
+          <span>粘贴 Gemini、ChatGPT 或其他 AI 生成的 SVG 代码</span>
+        </div>
+        <button id="loadSampleBtn">载入示例</button>
+      </div>
+      <textarea id="sourceInput" spellcheck="false" placeholder="在这里粘贴完整 SVG 代码"></textarea>
+      <div class="landing-actions">
+        <button id="clearSourceBtn">清空</button>
+        <button id="uploadBtn">上传 SVG</button>
+        <button class="primary" id="enterBtn">进入编辑器</button>
+        <input id="fileInput" class="hidden" type="file" accept=".svg,image/svg+xml">
+      </div>
+    </div>
+    <div class="quick-box">
+      <h2>优化重点</h2>
+      <div class="quick-item">选中文字后可直接调整内容、字体、字号、字重和颜色。</div>
+      <div class="quick-item">框选多个元素后可对齐、等距分布、统一字体或统一颜色。</div>
+      <div class="quick-item">方向键微调位置，Shift 加方向键大步移动。</div>
+      <div class="quick-item">归整画布会按内容重新设置 viewBox，适合修复画面偏移。</div>
+    </div>
+  </section>
+
+  <section id="app" class="hidden">
+    <header>
+      <div class="toolbar-left">
+        <span class="app-title">AI SVG 优化器 V2</span>
+        <div class="tool-group">
+          <button id="toggleLeftPanelBtn" class="icon" title="折叠图层">层</button>
+          <button id="toggleRightPanelBtn" class="icon" title="折叠属性">属</button>
+          <button id="backBtn">返回导入</button>
+          <button id="undoBtn" title="Ctrl+Z">撤销</button>
+          <button id="redoBtn" title="Ctrl+Y">重做</button>
+        </div>
+        <div class="tool-group">
+          <button id="duplicateBtn">复制</button>
+          <button id="deleteBtn" class="danger">删除</button>
+          <button id="bringForwardBtn">上移</button>
+          <button id="sendBackwardBtn">下移</button>
+          <button id="bringTopBtn">置顶</button>
+          <button id="sendBottomBtn">置底</button>
+        </div>
+        <div class="tool-group">
+          <button data-align="left">左对齐</button>
+          <button data-align="hcenter">水平居中</button>
+          <button data-align="right">右对齐</button>
+          <button data-align="top">顶对齐</button>
+          <button data-align="vcenter">垂直居中</button>
+          <button data-align="bottom">底对齐</button>
+        </div>
+      </div>
+      <div class="toolbar-right">
+        <button id="distributeHBtn">横向等距</button>
+        <button id="distributeVBtn">纵向等距</button>
+        <button id="normalizeBtn">归整画布</button>
+        <button id="resetViewBtn">重置视图</button>
+        <button class="primary" id="exportBtn">导出 SVG</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="left-panel">
+        <div class="panel-head">
+          <span>图层</span>
+          <span id="layerCount">0</span>
+        </div>
+        <div class="panel-body">
+          <div class="layer-tools">
+            <input id="layerSearch" type="search" placeholder="搜索图层">
+            <button type="button" disabled title="锁定图层预留">锁</button>
+            <button type="button" disabled title="隐藏图层预留">眼</button>
+          </div>
+          <div id="layerList"></div>
+        </div>
+      </aside>
+
+      <section class="canvas-area" id="canvasArea">
+        <div id="canvasStage">
+          <div id="svgHost"></div>
+        </div>
+        <div id="selectionOverlay"></div>
+        <div id="rubberBand"></div>
+      </section>
+
+      <aside class="right-panel">
+        <div class="panel-head">
+          <span>属性检查器</span>
+          <span id="selectedCount">0</span>
+        </div>
+        <div class="panel-body">
+          <div id="emptyState" class="empty-state">选择画布或图层中的元素</div>
+
+          <div id="multiPanel" class="hidden">
+            <div class="prop-section">
+              <div class="prop-title">批量优化</div>
+              <div id="mixedState" class="field-note"></div>
+              <div class="inline-actions">
+                <button id="unifyFontBtn">统一字体</button>
+                <button id="unifyColorBtn">统一颜色</button>
+                <input id="batchColorInput" type="color" value="#111827" title="批量颜色">
+              </div>
+            </div>
+            <div class="prop-section">
+              <div class="prop-title">整体缩放</div>
+              <div class="row">
+                <label>比例</label>
+                <input id="scaleInput" type="number" min="0.1" max="5" step="0.05" value="1.1">
+              </div>
+              <button id="scaleSelectedBtn">应用缩放</button>
+            </div>
+          </div>
+
+          <div id="singlePanel" class="hidden">
+            <div class="prop-section">
+              <div class="prop-title">位置与尺寸</div>
+              <div class="row"><label>X</label><input id="propX" type="number" step="1"></div>
+              <div class="row"><label>Y</label><input id="propY" type="number" step="1"></div>
+              <div class="row"><label>宽</label><input id="propW" type="number" min="0" step="1"></div>
+              <div class="row"><label>高</label><input id="propH" type="number" min="0" step="1"></div>
+              <div class="row"><label>透明度</label><input id="propOpacity" type="number" min="0" max="1" step="0.05"></div>
+            </div>
+
+            <div id="textSection" class="prop-section hidden">
+              <div class="prop-title">文本优化</div>
+              <div class="row"><label>内容</label><textarea id="propText"></textarea></div>
+              <div class="row">
+                <label>字体</label>
+                <select id="propFont">
+                  <option value="Microsoft YaHei, Arial, sans-serif">微软雅黑 / Arial</option>
+                  <option value="PingFang SC, Microsoft YaHei, sans-serif">苹方 / 微软雅黑</option>
+                  <option value="Arial, Helvetica, sans-serif">Arial</option>
+                  <option value="Inter, Arial, sans-serif">Inter</option>
+                  <option value="serif">Serif</option>
+                  <option value="monospace">Monospace</option>
+                </select>
+              </div>
+              <div class="row"><label>字号</label><input id="propFontSize" type="number" min="1" step="1"></div>
+              <div class="row">
+                <label>字重</label>
+                <select id="propFontWeight">
+                  <option value="400">常规</option>
+                  <option value="500">中等</option>
+                  <option value="600">半粗</option>
+                  <option value="700">粗体</option>
+                </select>
+              </div>
+              <div class="row">
+                <label>对齐</label>
+                <select id="propTextAnchor">
+                  <option value="start">左</option>
+                  <option value="middle">中</option>
+                  <option value="end">右</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="prop-section">
+              <div class="prop-title">样式</div>
+              <div class="row"><label>填充</label><input id="propFill" type="color"></div>
+              <div class="row"><label>描边</label><input id="propStroke" type="color"></div>
+              <div class="row"><label>线宽</label><input id="propStrokeWidth" type="number" min="0" step="0.5"></div>
+              <div class="row"><label>圆角</label><input id="propRadius" type="number" min="0" step="1"></div>
+              <div id="paintState" class="field-note hidden"></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="status">
+      <span id="statusText">滚轮缩放视图，右键拖动画布，空白处拖拽框选</span>
+      <span class="status-meta">
+        <span>小红书号：5407847824</span>
+        <span id="zoomText">100%</span>
+      </span>
+    </footer>
+  </section>
+
+  <div id="toast"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

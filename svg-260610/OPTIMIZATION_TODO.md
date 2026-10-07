@@ -7,18 +7,20 @@
 > 来源：与旧版本（v1.0 ~ v6）逐文件对比，并用关键词反向核验（`localStorage`、`MathJax`、`rotate`、`PathEditor`、`clipboard`、`clipPath` 等在 `src/` 命中数均为 **0**）。
 >
 > ⚠️ **参考代码已删除**（`archive/` 已于 2026-10-07 清理）。下表中的 `v3:1612`、`v4:1447`、`v6 draft-manager.js` 等是历史指针，仅供定位当时的实现思路，**代码已不可访问**。
-> - **P0 五项不受影响**：实现量很小（合计约 75 行），按下表描述直接写即可。
+> - **P0 五项已于 2026-10-07 全部完成**，见下方表格；相关实现位置一并列出，方便日后改动。
 > - **P1 项需要从零实现**：路径控制点编辑（原 ~250 行）、圈选（原 ~200 行）、旋转的 transform 解析、MathJax 集成。没有现成参考，成本已包含在下面的难度评估里。
 
-### P0：必须修（卡核心场景 / 现存 bug）
+### P0：必须修（卡核心场景 / 现存 bug）—— 已完成（2026-10-07）
 
-| # | 缺口 | 旧版实现 | 现状 | 难度 |
-|---|---|---|---|---|
-| 1 | **SVG 片段自动包裹导入** | v3:1612、v4:1012、v6 `svg-parser.js:17-22` | `src/svg.ts:116` 直接报「没有找到 `<svg>` 根节点」。**与核心定位冲突**：本编辑器用于二次优化 AI 生成的 SVG，而 AI 经常只输出片段 | 小 |
-| 2 | **`defs`/`clipPath`/`pattern`/`marker` 内元素过滤** | v3:857-865 | `grep "clipPath\|pattern\|marker"` = 0。**这是现存 bug**：`<clipPath>` 内的 `<rect>` 会进图层列表、可被选中拖动，直接破坏裁剪与渐变渲染 | 小-中 |
-| 3 | **草稿自动保存 / 恢复** | v4:948-990、v6 `draft-manager.js` | `grep localStorage` = 0。刷新页面丢失全部工作，且无任何未保存提示 | 小 |
-| 4 | **复制 SVG 代码到剪贴板** | v4:1472-1500、v6 `file-handler.js:44-55` | `grep clipboard` = 0，只有下载文件。主流程是“优化后贴回 AI 对话”，复制文本比下载文件更贴流程 | 小 |
-| 5 | **circle / ellipse 原生几何属性** | v2:455-459（按 tag 分支写 `r` / `rx` / `ry` / `x1-y2`） | `geometry.ts` 从不写 `r`、`ry`，缩放一律 `appendTransform` 堆 transform → 圆形半径改不了，导出文件全是 transform 而非干净几何 | 中 |
+| # | 缺口 | 实现位置 |
+|---|---|---|
+| 1 | **SVG 片段自动包裹导入** | `src/svg.ts` `extractSvgMarkup`：无 `<svg>` 根节点时，从第一个 SVG 图元（`SVG_ELEMENT_START`）截取并补上带 `viewBox="0 0 800 600"` 的根节点。片段仍走 `sanitizeSvg` 清洗 |
+| 2 | **定义容器内元素过滤** | `src/svg.ts` `getEditableElements` + `isInsideDefinition`（`Element.closest("defs, clipPath, mask, pattern, marker, symbol, filter")`）：定义容器内的图元不进图层列表、不可选、不可拖 |
+| 3 | **草稿自动保存 / 恢复** | `src/main.ts`：`saveHistory` 末尾写 `localStorage["ai-svg-editor:draft:v1"]`（SVG + 选中 ID + 锁定 ID + 时间戳，全程 try/catch）；首页「恢复上次草稿」按钮仅在有草稿时显示，恢复时保留原始 `data-editor-id` 以便选中/锁定对上号；导出成功后清除草稿 |
+| 4 | **复制 SVG 代码到剪贴板** | `src/main.ts`：`buildExportSvg` 抽出为下载与复制共用（两者产物一致），`copySvgCode` 用 `navigator.clipboard.writeText` + `execCommand("copy")` 回退；工具栏「复制代码」按钮 |
+| 5 | **circle / ellipse 原生几何缩放** | `src/geometry.ts`：`writeNativeGeometry` + `bakeResizeToNative`，无 transform 时把缩放结果写回 `r` / `rx` / `ry` / `x1-y2` / `points` / `x-y-width-height`（`rect` 的 `rx`/`ry` 按比例缩放）；`text`、`path`、`g`、圆在非等比缩放、祖先带旋转时回退 transform。`localSpaceBox` 负责 SVG 空间 → 节点属性坐标系的映射，所以嵌在带 transform 的 `<g>` 里也能写对 |
+
+三项缩放入口都走同一条原生几何路径：句柄缩放结束（`endPointer`，先撤掉预览 transform 再烘焙）、属性面板改宽高（`scaleNodeToBox`）、批量整体缩放（`scaleNodeAbout`）。
 
 ### P1：值得做
 
@@ -69,9 +71,14 @@
 - 补 SVG 清洗测试。
   - 覆盖 `script`、`foreignObject`、危险 `href`、危险 `style`、危险 `data:`。
   - 需要浏览器 DOM 或测试 DOM 环境，因为当前 Node 环境没有 `DOMParser`。
+- 补片段包裹导入测试（P0 第 1 项）。
+  - 覆盖纯图元片段、带 ```svg 围栏、夹在散文里的片段、补根节点后仍能被 `sanitizeSvg` 正确处理。
+  - 同样卡在缺少 `DOMParser`：`extractSvgMarkup` 本身是纯字符串逻辑，但结果要经 `parseSvgSource` 才能验证。
+- 补 localStorage 草稿测试（P0 第 3 项）。
+  - 覆盖写入、读取、损坏 JSON 容错、隐私模式下写入失败静默。
 - 把 `npm test` 作为日常回归入口。
-  - 当前已覆盖 path 变换和连续 `translate(...)` 合并。
-  - 后续可逐步把历史记录、SVG 清洗、导出逻辑纳入测试。
+  - 已覆盖 path 变换、连续 `translate(...)` 合并、原生几何缩放（`bakeResizeToNative`，含嵌套 `<g>` 的坐标系换算）。
+  - 后续可逐步把历史记录、SVG 清洗、片段包裹导入、草稿与导出逻辑纳入测试。
 
 ## P1：代码结构
 
@@ -146,3 +153,5 @@
 - SVG 清洗增强，拦截更多危险 URL 和 CSS。
 - 新增基础单元测试和 `npm test` 脚本。
 - README 已更新为完整项目说明。
+- P0 五项功能回迁完成（片段包裹导入、定义容器过滤、草稿自动保存/恢复、复制 SVG 代码、原生几何缩放），见上方表格。
+- 单元测试从 6 个扩到 14 个：新增 `bakeResizeToNative` 的 7 个用例，用 `ShimMatrix` / `ShimPoint` 补上 Node 环境缺失的 SVG DOM，覆盖 circle / ellipse / rect（含 `rx` 等比缩放）/ line / polygon / text 回退，以及嵌在带 transform 的 `<g>` 里的坐标系换算。

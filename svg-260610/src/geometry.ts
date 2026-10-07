@@ -179,6 +179,147 @@ export function moveNode(node: EditableElement, dx: number, dy: number): void {
   addTranslate(node, dx, dy);
 }
 
+// 把 SVG 空间的矩形映射回节点自身的属性坐标系；映射后出现旋转时返回 null（写不成矩形属性）。
+function localSpaceBox(
+  node: EditableElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): BBox | null {
+  const svg = node.ownerSVGElement;
+  const nodeMatrix = node.getScreenCTM();
+  const svgMatrix = svg?.getScreenCTM();
+  if (!nodeMatrix || !svgMatrix) return null;
+
+  const toLocal = svgMatrix.inverse().multiply(nodeMatrix).inverse();
+  const p0 = new DOMPoint(x, y).matrixTransform(toLocal);
+  const p1 = new DOMPoint(x + width, y).matrixTransform(toLocal);
+  const p3 = new DOMPoint(x, y + height).matrixTransform(toLocal);
+
+  if (Math.abs(p0.y - p1.y) > 0.5 || Math.abs(p0.x - p3.x) > 0.5) return null;
+
+  const minX = Math.min(p0.x, p1.x);
+  const maxX = Math.max(p0.x, p1.x);
+  const minY = Math.min(p0.y, p3.y);
+  const maxY = Math.max(p0.y, p3.y);
+  const widthLocal = maxX - minX;
+  const heightLocal = maxY - minY;
+  if (widthLocal <= 0 || heightLocal <= 0) return null;
+
+  return {
+    x: minX,
+    y: minY,
+    width: widthLocal,
+    height: heightLocal,
+    cx: (minX + maxX) / 2,
+    cy: (minY + maxY) / 2,
+  };
+}
+
+function mapCoord(value: number, from: BBox, to: BBox, horizontal: boolean): number {
+  if (horizontal) {
+    const factor = from.width > 0 ? to.width / from.width : 1;
+    return to.x + (value - from.x) * factor;
+  }
+  const factor = from.height > 0 ? to.height / from.height : 1;
+  return to.y + (value - from.y) * factor;
+}
+
+function aspectChanged(from: BBox, to: BBox): boolean {
+  if (from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0) return true;
+  const before = from.width / from.height;
+  const after = to.width / to.height;
+  return Math.abs(before - after) / Math.max(before, after) > 0.02;
+}
+
+const NUMBER_LIST_RE = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi;
+
+// 把缩放结果写成原生几何属性（r / rx / ry / x1-y2 / points / x-y-width-height），
+// 导出文件里就不会残留一串无意义的 scale(...)。写不成时返回 false，由调用方回退到 transform。
+// from / to 均为 SVG 空间，内部会映射回节点的属性坐标系。
+function writeNativeGeometry(node: EditableElement, from: BBox, to: BBox): boolean {
+  const type = node.tagName.toLowerCase();
+  if (!Number.isFinite(to.width) || !Number.isFinite(to.height)) return false;
+
+  // 圆没有 ry，非等比缩放会把它拉成椭圆，只能走 transform。
+  if (type === "circle" && aspectChanged(from, to)) return false;
+
+  const localFrom = localSpaceBox(node, from.x, from.y, from.width, from.height);
+  const localTo = localSpaceBox(node, to.x, to.y, to.width, to.height);
+  if (!localFrom || !localTo) return false;
+
+  if (type === "circle") {
+    node.setAttribute("cx", String(round(localTo.cx)));
+    node.setAttribute("cy", String(round(localTo.cy)));
+    node.setAttribute("r", String(round(Math.max(0.1, localTo.width / 2))));
+    return true;
+  }
+
+  if (type === "ellipse") {
+    node.setAttribute("cx", String(round(localTo.cx)));
+    node.setAttribute("cy", String(round(localTo.cy)));
+    node.setAttribute("rx", String(round(Math.max(0.1, localTo.width / 2))));
+    node.setAttribute("ry", String(round(Math.max(0.1, localTo.height / 2))));
+    return true;
+  }
+
+  if (type === "rect") {
+    node.setAttribute("x", String(round(localTo.x)));
+    node.setAttribute("y", String(round(localTo.y)));
+    node.setAttribute("width", String(round(Math.max(0.1, localTo.width))));
+    node.setAttribute("height", String(round(Math.max(0.1, localTo.height))));
+    if (node.hasAttribute("rx")) {
+      node.setAttribute("rx", String(round(parseNumber(node.getAttribute("rx")) * (localFrom.width > 0 ? localTo.width / localFrom.width : 1))));
+    }
+    if (node.hasAttribute("ry")) {
+      node.setAttribute("ry", String(round(parseNumber(node.getAttribute("ry")) * (localFrom.height > 0 ? localTo.height / localFrom.height : 1))));
+    }
+    return true;
+  }
+
+  if (type === "image") {
+    node.setAttribute("x", String(round(localTo.x)));
+    node.setAttribute("y", String(round(localTo.y)));
+    node.setAttribute("width", String(round(Math.max(0.1, localTo.width))));
+    node.setAttribute("height", String(round(Math.max(0.1, localTo.height))));
+    return true;
+  }
+
+  if (type === "line") {
+    node.setAttribute("x1", String(round(mapCoord(parseNumber(node.getAttribute("x1"), localFrom.x), localFrom, localTo, true))));
+    node.setAttribute("y1", String(round(mapCoord(parseNumber(node.getAttribute("y1"), localFrom.y), localFrom, localTo, false))));
+    node.setAttribute("x2", String(round(mapCoord(parseNumber(node.getAttribute("x2"), localFrom.x), localFrom, localTo, true))));
+    node.setAttribute("y2", String(round(mapCoord(parseNumber(node.getAttribute("y2"), localFrom.y), localFrom, localTo, false))));
+    return true;
+  }
+
+  if (type === "polygon" || type === "polyline") {
+    const nums = (node.getAttribute("points") || "").match(NUMBER_LIST_RE);
+    if (!nums || nums.length < 2) return false;
+    const pairs: string[] = [];
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      const x = Number(nums[i]);
+      const y = Number(nums[i + 1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+      pairs.push(`${round(mapCoord(x, localFrom, localTo, true))},${round(mapCoord(y, localFrom, localTo, false))}`);
+    }
+    node.setAttribute("points", pairs.join(" "));
+    return true;
+  }
+
+  return false;
+}
+
+// 把手柄缩放的结果写回原生几何属性（circle 的 r、ellipse 的 rx/ry、line 的 x1-y2 等）。
+// 不能原生表达时（text、g、path、祖先带旋转）返回 false，调用方保留 transform。
+// 调用前需要先把拖拽期间挂上去的 transform 移除，让节点回到 from 对应的几何状态。
+export function bakeResizeToNative(node: EditableElement, from: BBox, to: BBox): boolean {
+  if (from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0) return false;
+  if (!Number.isFinite(to.width) || !Number.isFinite(to.height)) return false;
+  return writeNativeGeometry(node, from, to);
+}
+
 export function scaleNodeAbout(
   node: EditableElement,
   cx: number,
@@ -186,6 +327,23 @@ export function scaleNodeAbout(
   factor: number,
 ): void {
   if (!Number.isFinite(factor) || factor <= 0) return;
+
+  // 没有 transform 时优先写原生属性，避免批量缩放把每个图元都堆上 scale(...)。
+  if (!node.getAttribute("transform")) {
+    const from = visualBBox(node);
+    if (from.width > 0 && from.height > 0) {
+      const to: BBox = {
+        x: cx + (from.x - cx) * factor,
+        y: cy + (from.y - cy) * factor,
+        width: from.width * factor,
+        height: from.height * factor,
+        cx: cx + (from.cx - cx) * factor,
+        cy: cy + (from.cy - cy) * factor,
+      };
+      if (writeNativeGeometry(node, from, to)) return;
+    }
+  }
+
   if (node.tagName.toLowerCase() === "path" && !node.getAttribute("transform")) {
     const d = node.getAttribute("d");
     const scaled = d ? scalePathData(d, cx, cy, factor) : null;
@@ -223,6 +381,20 @@ export function scaleNodeToBox(
   const sx = newWidth / box.width;
   const sy = newHeight / box.height;
   if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return;
+
+  // 还没有 transform 时优先写原生属性：拖圆形的句柄会真正改 r，导出文件也更干净。
+  if (!node.getAttribute("transform")) {
+    const to: BBox = {
+      x: box.x,
+      y: box.y,
+      width: newWidth,
+      height: newHeight,
+      cx: box.x + newWidth / 2,
+      cy: box.y + newHeight / 2,
+    };
+    if (writeNativeGeometry(node, box, to)) return;
+  }
+
   appendTransform(
     node,
     `translate(${round(box.x)} ${round(box.y)}) scale(${round(sx)} ${round(sy)}) translate(${round(-box.x)} ${round(-box.y)})`,

@@ -4,6 +4,13 @@ import type { EditableElement, ParseError, ParseSvgResult } from "./types";
 
 const DANGEROUS_ELEMENTS = "script, foreignObject, iframe, object, embed";
 const URL_ATTRS = new Set(["href", "xlink:href", "src"]);
+
+// 这些容器里的图元是"定义"，不是画布内容：不能进图层列表，也不能被选中拖动，
+// 否则会把 clipPath / pattern / mask 的图元拖出定义容器，直接破坏裁剪与渐变渲染。
+const DEFINITION_CONTAINERS = "defs, clipPath, mask, pattern, marker, symbol, filter";
+
+// AI 经常只输出片段（裸 <rect> / <path>），没有 <svg> 根节点。
+const SVG_ELEMENT_START = /<(?:svg|rect|circle|ellipse|line|polyline|polygon|path|text|g|use|image|defs|symbol|clipPath|mask|pattern|marker|linearGradient|radialGradient|filter)\b/i;
 const DANGEROUS_CSS_RE = /(?:javascript:|vbscript:|data:text\/html|expression\s*\(|@import\b|-moz-binding\s*:|behavior\s*:)/i;
 
 function parseFailure(message: string): ParseError {
@@ -40,6 +47,14 @@ function extractSvgMarkup(source: string): string {
 
   if (start >= 0 && end >= start) {
     return candidate.slice(start, end + "</svg>".length).trim();
+  }
+
+  // 没有 <svg> 根节点的片段：从第一个 SVG 图元开始截取并补一层根节点。
+  if (start < 0) {
+    const fragmentStart = candidate.search(SVG_ELEMENT_START);
+    if (fragmentStart >= 0) {
+      return `<svg xmlns="${SVG_NS}" viewBox="0 0 800 600">${candidate.slice(fragmentStart).trim()}</svg>`;
+    }
   }
 
   return candidate;
@@ -140,7 +155,12 @@ export function normalizeSvgSize(svg: SVGSVGElement): void {
 
 export function getEditableElements(svg: SVGSVGElement | null): EditableElement[] {
   if (!svg) return [];
-  return Array.from(svg.querySelectorAll(EDITABLE_SELECTOR)).filter((node) => node !== svg) as EditableElement[];
+  return Array.from(svg.querySelectorAll(EDITABLE_SELECTOR))
+    .filter((node) => node !== svg && !isInsideDefinition(node)) as EditableElement[];
+}
+
+function isInsideDefinition(node: Element): boolean {
+  return Boolean(node.closest(DEFINITION_CONTAINERS));
 }
 
 export function cleanClone(svg: SVGSVGElement): SVGSVGElement {

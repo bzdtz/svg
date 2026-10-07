@@ -3,6 +3,7 @@ import "./styles.css";
 import { createEditorState } from "./state";
 import { cleanClone, parseSvgSource, normalizeSvgSize, getEditableElements, serializeSvg, serializeSvgForHistory } from "./svg";
 import {
+  bakeResizeToNative,
   moveNode,
   parseNumber,
   round,
@@ -152,6 +153,54 @@ function snapshotKey(snapshot: HistorySnapshot): string {
   return JSON.stringify(snapshot);
 }
 
+const DRAFT_KEY = "ai-svg-editor:draft:v1";
+
+interface DraftRecord {
+  svg: string;
+  selectedIds: string[];
+  lockedIds: string[];
+  savedAt: number;
+}
+
+function readDraft(): DraftRecord | null {
+  try {
+    const raw = window.localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as Partial<DraftRecord>;
+    if (!data || typeof data.svg !== "string" || !data.svg.trim()) return null;
+    const stringIds = (list: unknown) =>
+      Array.isArray(list) ? list.filter((id): id is string => typeof id === "string") : [];
+    return {
+      svg: data.svg,
+      selectedIds: stringIds(data.selectedIds),
+      lockedIds: stringIds(data.lockedIds),
+      savedAt: typeof data.savedAt === "number" ? data.savedAt : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeDraft(snapshot: HistorySnapshot): void {
+  try {
+    window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...snapshot, savedAt: Date.now() }));
+  } catch {
+    // 隐私模式或配额超限时静默放弃：草稿只是便利功能，不该挡住编辑。
+  }
+}
+
+function clearDraft(): void {
+  try {
+    window.localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function refreshDraftButton(): void {
+  byId<HTMLButtonElement>("restoreDraftBtn").classList.toggle("hidden", readDraft() === null);
+}
+
 function saveHistory(label?: string): void {
   const snapshot = createHistorySnapshot();
   if (!snapshot) return;
@@ -163,6 +212,7 @@ function saveHistory(label?: string): void {
   state.lastSnapshot = key;
   updateHistoryButtons();
   if (label) el.statusText.textContent = label;
+  writeDraft(snapshot);
 }
 
 function filterExistingIds(ids: string[]): string[] {
@@ -258,6 +308,32 @@ function loadSvgFromText(text: string): void {
     return;
   }
   loadSvgElement(result, true);
+}
+
+function restoreDraft(): void {
+  const record = readDraft();
+  if (!record) {
+    toast("没有可恢复的草稿");
+    return;
+  }
+  const result = parseSvgSource(record.svg);
+  if (isParseError(result)) {
+    clearDraft();
+    refreshDraftButton();
+    toast(result.message);
+    return;
+  }
+  // resetHistory=false 才会保留草稿里的 data-editor-id，选中和锁定才能对上号。
+  loadSvgElement(result, false, {
+    svg: record.svg,
+    selectedIds: record.selectedIds,
+    lockedIds: record.lockedIds,
+  });
+  state.history = [];
+  state.redo = [];
+  state.lastSnapshot = "";
+  saveHistory("已恢复草稿");
+  toast("已恢复上次草稿");
 }
 
 function bindSvgEvents(): void {
@@ -836,11 +912,18 @@ function endPointer(): void {
     }
   }
   if (state.pointer.type === "resize") {
-    if (state.pointer.moved) {
+    const pointer = state.pointer;
+    if (pointer.moved) {
+      if (!pointer.transform) {
+        // 原本没有 transform：撤掉拖拽期间的预览 transform，把缩放结果写回原生几何属性。
+        const finalBox = visualBBox(pointer.node);
+        pointer.node.removeAttribute("transform");
+        bakeResizeToNative(pointer.node, pointer.box, finalBox);
+      }
       renderAll();
       saveHistory("已调整尺寸");
     } else {
-      restoreTransform(state.pointer.node, state.pointer.transform);
+      restoreTransform(pointer.node, pointer.transform);
       updateSelectionOverlay();
     }
   }
@@ -1183,14 +1266,21 @@ function normalizeCanvas(): void {
   saveHistory("已归整画布");
 }
 
-function exportSvg(): void {
-  if (!state.svg) return;
+// 导出用的副本：清掉编辑器标记并按内容归整画布。下载和复制共用，保证两者产物一致。
+function buildExportSvg(): SVGSVGElement | null {
+  if (!state.svg) return null;
   const clone = cleanClone(state.svg);
   const box = unionBBox(getContentElements(state.svg));
   if (box && box.width > 0 && box.height > 0) {
     applyCanvasBox(clone, paddedContentBox(box));
   }
-  const data = serializeSvg(clone);
+  return clone;
+}
+
+function exportSvg(): void {
+  const svg = buildExportSvg();
+  if (!svg) return;
+  const data = serializeSvg(svg);
   const blob = new Blob([data], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1200,7 +1290,40 @@ function exportSvg(): void {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+  clearDraft();
   toast("已导出 SVG");
+}
+
+// 复制文本比下载文件更贴「改完贴回 AI 对话」的流程。
+async function copySvgCode(): Promise<void> {
+  const svg = buildExportSvg();
+  if (!svg) return;
+  const data = serializeSvg(svg);
+
+  const fallbackCopy = (): boolean => {
+    const area = document.createElement("textarea");
+    area.value = data;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  };
+
+  try {
+    await navigator.clipboard.writeText(data);
+    toast("已复制 SVG 代码");
+  } catch {
+    toast(fallbackCopy() ? "已复制 SVG 代码" : "复制失败，可改用导出文件");
+  }
 }
 
 function bindPropertyInputs(): void {
@@ -1246,11 +1369,13 @@ function bindControls(): void {
   byId<HTMLButtonElement>("clearSourceBtn").onclick = () => {
     el.sourceInput.value = "";
   };
+  byId<HTMLButtonElement>("restoreDraftBtn").onclick = restoreDraft;
   byId<HTMLButtonElement>("uploadBtn").onclick = () => el.fileInput.click();
   byId<HTMLButtonElement>("enterBtn").onclick = () => loadSvgFromText(el.sourceInput.value);
   byId<HTMLButtonElement>("backBtn").onclick = () => {
     el.app.classList.add("hidden");
     el.landing.classList.remove("hidden");
+    refreshDraftButton();
   };
   byId<HTMLButtonElement>("toggleLeftPanelBtn").onclick = () => togglePanel("left");
   byId<HTMLButtonElement>("toggleRightPanelBtn").onclick = () => togglePanel("right");
@@ -1283,6 +1408,7 @@ function bindControls(): void {
   byId<HTMLButtonElement>("distributeVBtn").onclick = () => distributeSelected("y");
   byId<HTMLButtonElement>("normalizeBtn").onclick = normalizeCanvas;
   byId<HTMLButtonElement>("resetViewBtn").onclick = fitView;
+  byId<HTMLButtonElement>("copyBtn").onclick = () => void copySvgCode();
   byId<HTMLButtonElement>("exportBtn").onclick = exportSvg;
   byId<HTMLButtonElement>("unifyFontBtn").onclick = unifyFont;
   byId<HTMLButtonElement>("unifyColorBtn").onclick = unifyColor;
@@ -1363,3 +1489,4 @@ bindCanvas();
 bindKeyboard();
 bindPropertyInputs();
 updateHistoryButtons();
+refreshDraftButton();

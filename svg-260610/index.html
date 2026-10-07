@@ -17,6 +17,7 @@
       </div>
       <textarea id="sourceInput" spellcheck="false" placeholder="在这里粘贴完整 SVG 代码"></textarea>
       <div class="landing-actions">
+        <button id="restoreDraftBtn" class="hidden">恢复上次草稿</button>
         <button id="clearSourceBtn">清空</button>
         <button id="uploadBtn">上传 SVG</button>
         <button class="primary" id="enterBtn">进入编辑器</button>
@@ -25,6 +26,8 @@
     </div>
     <div class="quick-box">
       <h2>优化重点</h2>
+      <div class="quick-item">支持直接粘贴片段：缺少 SVG 根节点时会自动补上，不用手动包一层。</div>
+      <div class="quick-item">刷新页面草稿不会丢，回首页点「恢复上次草稿」接着改。</div>
       <div class="quick-item">选中文字后可直接调整内容、字体、字号、字重和颜色。</div>
       <div class="quick-item">框选多个元素后可对齐、等距分布、统一字体或统一颜色。</div>
       <div class="quick-item">方向键微调位置，Shift 加方向键大步移动。</div>
@@ -65,6 +68,7 @@
         <button id="distributeVBtn">纵向等距</button>
         <button id="normalizeBtn">归整画布</button>
         <button id="resetViewBtn">重置视图</button>
+        <button id="copyBtn" title="复制优化后的 SVG 代码到剪贴板">复制代码</button>
         <button class="primary" id="exportBtn">导出 SVG</button>
       </div>
     </header>

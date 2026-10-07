@@ -1,4 +1,6 @@
 {
+  "name": "ai-svg-editor",
+  "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "typecheck": "tsc --noEmit",

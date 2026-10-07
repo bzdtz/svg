@@ -55,10 +55,12 @@ src/
   state.ts      编辑器状态初始化
   types.ts      共享类型
   styles.css    编辑器样式
+index.html      页面骨架与控件入口
+scripts/
+  build-single.mjs  把构建产物打成单文件 HTML
 tests/
-  unit.test.ts  路径变换和 transform 合并的单元测试
-legacy-html/    旧版单文件 HTML 备份
-dist/           构建产物
+  unit.test.ts  path 变换、transform 合并和本地几何写回的单元测试
+dist/           构建产物（已 gitignore，不入库）
 ```
 
 ## 测试覆盖
